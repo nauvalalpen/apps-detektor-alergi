@@ -1,0 +1,42 @@
+{
+  "name": "AlergiTrack – Jurnal Alergi",
+  "short_name": "AlergiTrack",
+  "description": "Jurnal harian makanan, gatal, dan obat untuk penderita eksim",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c1410",
+  "theme_color": "#4ade80",
+  "orientation": "portrait",
+  "categories": ["health", "medical", "lifestyle"],
+  "lang": "id",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Catat Gatal",
+      "short_name": "Gatal",
+      "description": "Catat episode gatal sekarang",
+      "url": "/?action=itch",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Catat Makan",
+      "short_name": "Makan",
+      "description": "Catat makanan sekarang",
+      "url": "/?action=meal",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
