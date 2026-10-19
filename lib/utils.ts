@@ -1,11 +1,13 @@
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import { getDateWIB } from '@/lib/timezone'
+import type { MealWithItems, ItchEvent } from '@/lib/database.types'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-/** Severity 1-10 → warna */
+/** Severity 1-10 → Tailwind text-color */
 export function severityColor(severity: number): string {
   if (severity <= 2) return 'text-emerald-400'
   if (severity <= 4) return 'text-yellow-400'
@@ -14,6 +16,7 @@ export function severityColor(severity: number): string {
   return 'text-red-600'
 }
 
+/** Severity → background+border CSS class names */
 export function severityBg(severity: number): string {
   if (severity <= 2) return 'bg-emerald-500/20 border-emerald-500/30'
   if (severity <= 4) return 'bg-yellow-500/20 border-yellow-500/30'
@@ -22,9 +25,17 @@ export function severityBg(severity: number): string {
   return 'bg-red-700/30 border-red-600/40'
 }
 
-/** Severity → label teks */
+/** Severity 1-10 → custom CSS class (sev-*) */
+export function severityPillClass(severity: number): string {
+  if (severity <= 0) return 'sev-none'
+  if (severity <= 4) return 'sev-mild'
+  if (severity <= 6) return 'sev-medium'
+  return 'sev-severe'
+}
+
+/** Severity → human-readable label */
 export function severityLabel(severity: number | null): string {
-  if (!severity) return 'Tidak ada'
+  if (!severity || severity <= 0) return 'Tidak gatal'
   if (severity <= 2) return 'Sangat Ringan'
   if (severity <= 4) return 'Ringan'
   if (severity <= 6) return 'Sedang'
@@ -32,20 +43,31 @@ export function severityLabel(severity: number | null): string {
   return 'Sangat Parah'
 }
 
-/** Warna kalender berdasarkan severity tertinggi hari itu */
+/** Calendar cell colour based on max severity that day */
 export function calendarDayColor(maxSeverity: number | null): string {
-  if (!maxSeverity) return 'bg-emerald-500/30 text-emerald-300'
-  if (maxSeverity <= 3) return 'bg-yellow-500/30 text-yellow-300'
-  if (maxSeverity <= 6) return 'bg-orange-500/30 text-orange-300'
-  return 'bg-red-500/30 text-red-300'
+  if (!maxSeverity || maxSeverity <= 0) return 'bg-emerald-500/25 text-emerald-300'
+  if (maxSeverity <= 3) return 'bg-yellow-500/25 text-yellow-200'
+  if (maxSeverity <= 6) return 'bg-orange-500/25 text-orange-200'
+  return 'bg-red-500/25 text-red-200'
 }
 
-/** Normalize string untuk perbandingan */
+/** Normalize food item string */
 export function normalizeItem(name: string): string {
   return name.toLowerCase().trim()
 }
 
-/** Lift label keyakinan berdasarkan lift dan jumlah sampel */
+/** 
+ * Count unique days that have at least one meal OR one itch event.
+ * Use this everywhere instead of computing locally — fixes Bug #1.
+ */
+export function countCollectedDays(meals: MealWithItems[], itchEvents: ItchEvent[]): number {
+  const dates = new Set<string>()
+  for (const m of meals) dates.add(getDateWIB(m.eaten_at))
+  for (const e of itchEvents) dates.add(getDateWIB(e.started_at))
+  return dates.size
+}
+
+/** Lift label keyakinan */
 export function liftConfidenceLabel(lift: number, count: number): string {
   if (count < 3) return 'Data belum cukup'
   if (lift < 1.2) return 'Kemungkinan rendah'
@@ -53,22 +75,41 @@ export function liftConfidenceLabel(lift: number, count: number): string {
   return 'Kemungkinan tinggi'
 }
 
-/** Format area tubuh */
+/** Body areas list */
 export const BODY_AREAS = [
-  'tangan kiri',
-  'tangan kanan',
-  'kaki kiri',
-  'kaki kanan',
-  'badan',
-  'wajah',
-  'lainnya',
+  'Tangan kiri',
+  'Tangan kanan',
+  'Kaki kiri',
+  'Kaki kanan',
+  'Badan',
+  'Wajah',
+  'Kepala',
+  'Lainnya',
 ] as const
 
+/** Weather options */
 export const WEATHER_OPTIONS = [
-  'panas',
-  'hujan',
-  'berkeringat banyak',
+  'Panas',
+  'Hujan',
+  'Berkeringat banyak',
   'AC terus',
-  'lembab',
-  'berangin',
+  'Lembab',
+  'Berangin',
 ] as const
+
+/** Stress emoji labels */
+export const STRESS_EMOJIS: Record<number, string> = {
+  1: '😌',
+  2: '🙂',
+  3: '😐',
+  4: '😟',
+  5: '😰',
+}
+
+export const STRESS_LABELS: Record<number, string> = {
+  1: 'Sangat santai',
+  2: 'Santai',
+  3: 'Biasa',
+  4: 'Stres',
+  5: 'Sangat stres',
+}

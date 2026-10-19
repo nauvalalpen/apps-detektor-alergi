@@ -3,15 +3,12 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { Database } from '@/lib/database.types'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { BottomSheet } from '@/components/ui/bottom-sheet'
 import { Button } from '@/components/ui/button'
-import { Input, Label, Textarea } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Slider } from '@/components/ui/badge'
 import { showToast } from '@/components/ui/toaster'
-import { getNowLocalISO, localToUTC, severityLabel } from '@/lib/timezone'
-import { cn, BODY_AREAS } from '@/lib/utils'
-import { Zap } from 'lucide-react'
+import { getNowLocalISO, localToUTC, formatTimeWIB } from '@/lib/timezone'
+import { cn, BODY_AREAS, severityLabel } from '@/lib/utils'
+import { Zap, Clock, Plus } from 'lucide-react'
 import type { ItchEvent } from '@/lib/database.types'
 
 interface ItchFormProps {
@@ -20,15 +17,39 @@ interface ItchFormProps {
   userId: string
   editData?: ItchEvent | null
   onSave: (event: ItchEvent) => void
-  quickMode?: boolean // langsung simpan tanpa konfirmasi
 }
 
-export function ItchForm({ open, onClose, userId, editData, onSave, quickMode }: ItchFormProps) {
+const TIME_PRESETS = [
+  { label: 'Sekarang', offset: 0 },
+  { label: '15 mnt lalu', offset: -15 },
+  { label: '30 mnt lalu', offset: -30 },
+  { label: '1 jam lalu', offset: -60 },
+]
+
+function getOffsetISO(offsetMinutes: number): string {
+  const now = new Date(Date.now() + offsetMinutes * 60 * 1000)
+  return new Date(now.getTime() + 7 * 60 * 60 * 1000).toISOString().slice(0, 16)
+}
+
+const SEV_GRID = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+function sevColor(s: number) {
+  if (s <= 2) return { bg: 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300', active: 'bg-emerald-500/40 border-emerald-400 text-emerald-200 font-bold' }
+  if (s <= 4) return { bg: 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300', active: 'bg-yellow-500/40 border-yellow-400 text-yellow-100 font-bold' }
+  if (s <= 6) return { bg: 'bg-orange-500/20 border-orange-500/40 text-orange-300', active: 'bg-orange-500/40 border-orange-400 text-orange-100 font-bold' }
+  if (s <= 8) return { bg: 'bg-red-500/20 border-red-500/40 text-red-300', active: 'bg-red-500/40 border-red-400 text-red-100 font-bold' }
+  return { bg: 'bg-red-700/20 border-red-600/40 text-red-300', active: 'bg-red-700/50 border-red-500 text-red-100 font-bold' }
+}
+
+export function ItchForm({ open, onClose, userId, editData, onSave }: ItchFormProps) {
   const [startedAt, setStartedAt] = useState(getNowLocalISO())
+  const [selectedPreset, setSelectedPreset] = useState(0)
+  const [showCustomTime, setShowCustomTime] = useState(false)
   const [severity, setSeverity] = useState(5)
   const [bodyAreas, setBodyAreas] = useState<string[]>([])
   const [hasBumps, setHasBumps] = useState(false)
   const [notes, setNotes] = useState('')
+  const [showNotes, setShowNotes] = useState(false)
   const [loading, setLoading] = useState(false)
   const supabase = createClient()
 
@@ -36,33 +57,40 @@ export function ItchForm({ open, onClose, userId, editData, onSave, quickMode }:
     if (open) {
       if (editData) {
         const utcDate = new Date(editData.started_at)
-        const localISO = new Date(utcDate.getTime() + 7 * 60 * 60 * 1000)
-          .toISOString().slice(0, 16)
+        const localISO = new Date(utcDate.getTime() + 7 * 60 * 60 * 1000).toISOString().slice(0, 16)
         setStartedAt(localISO)
         setSeverity(editData.severity ?? 5)
         setBodyAreas(editData.body_areas ?? [])
         setHasBumps(editData.has_bumps ?? false)
         setNotes(editData.notes ?? '')
+        setShowNotes(!!editData.notes)
+        setShowCustomTime(true)
+        setSelectedPreset(-1)
       } else {
         setStartedAt(getNowLocalISO())
         setSeverity(5)
         setBodyAreas([])
         setHasBumps(false)
         setNotes('')
+        setShowNotes(false)
+        setShowCustomTime(false)
+        setSelectedPreset(0)
       }
     }
   }, [open, editData])
 
-  function toggleArea(area: string) {
-    setBodyAreas(prev =>
-      prev.includes(area) ? prev.filter(a => a !== area) : [...prev, area]
-    )
+  function handlePresetSelect(idx: number, offset: number) {
+    setSelectedPreset(idx)
+    setShowCustomTime(false)
+    setStartedAt(getOffsetISO(offset))
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setLoading(true)
+  function toggleArea(area: string) {
+    setBodyAreas(prev => prev.includes(area) ? prev.filter(a => a !== area) : [...prev, area])
+  }
 
+  async function handleSubmit() {
+    setLoading(true)
     try {
       const startedAtUTC = localToUTC(startedAt)
       const payload = {
@@ -72,141 +100,195 @@ export function ItchForm({ open, onClose, userId, editData, onSave, quickMode }:
         body_areas: bodyAreas,
         has_bumps: hasBumps,
         notes: notes || null,
-      } satisfies Database['public']['Tables']['itch_events']['Insert']
+      }
 
       if (editData) {
-        const { data, error } = await supabase
-          .from('itch_events')
-          .update(payload)
-          .eq('id', editData.id)
-          .select()
-          .single()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data, error } = await (supabase.from('itch_events') as any).update(payload).eq('id', editData.id).select().single()
         if (error) throw error
         showToast({ title: 'Episode gatal diperbarui', variant: 'success' })
-        onSave(data)
+        onSave(data as ItchEvent)
       } else {
-        const { data, error } = await supabase
-          .from('itch_events')
-          .insert(payload)
-          .select()
-          .single()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data, error } = await (supabase.from('itch_events') as any).insert(payload).select().single()
         if (error) throw error
         showToast({ title: 'Gatal berhasil dicatat!', variant: 'success' })
-        onSave(data)
+        onSave(data as ItchEvent)
       }
       onClose()
     } catch {
-      showToast({ title: 'Gagal menyimpan', variant: 'destructive' })
+      showToast({ title: 'Gagal menyimpan, coba lagi', variant: 'destructive' })
     } finally {
       setLoading(false)
     }
   }
 
-  const severityColors = (s: number) => {
-    if (s <= 2) return 'text-emerald-400'
-    if (s <= 4) return 'text-yellow-400'
-    if (s <= 6) return 'text-orange-400'
-    if (s <= 8) return 'text-red-400'
-    return 'text-red-600 font-bold'
-  }
+  const displayTime = showCustomTime
+    ? formatTimeWIB(localToUTC(startedAt))
+    : selectedPreset === -1 ? 'Waktu diatur' : TIME_PRESETS[selectedPreset]?.label ?? 'Sekarang'
+
+  const sevLabels = ['Ringan', 'Ringan', 'Ringan', 'Ringan', 'Sedang', 'Sedang', 'Parah', 'Parah', 'Sangat parah', 'Sangat parah']
 
   return (
-    <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Zap className="w-5 h-5 text-amber-400" />
-            {editData ? 'Edit Episode Gatal' : 'Catat Gatal'}
-          </DialogTitle>
-        </DialogHeader>
+    <BottomSheet open={open} onClose={onClose} title={editData ? 'Edit Episode Gatal' : 'Detail Gatal'}>
+      <div className="px-4 py-4 space-y-5">
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="space-y-1.5">
-            <Label htmlFor="itch-time">Mulai Gatal</Label>
-            <Input
-              id="itch-time"
+        {/* Time presets */}
+        <div>
+          <p className="text-sm font-medium text-muted-foreground mb-2">Kapan mulai gatal?</p>
+          <div className="flex gap-2 flex-wrap">
+            {TIME_PRESETS.map((p, idx) => (
+              <button
+                key={p.label}
+                onClick={() => handlePresetSelect(idx, p.offset)}
+                className={`px-3 py-2 rounded-full text-sm font-medium border transition-all ${
+                  selectedPreset === idx && !showCustomTime
+                    ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                    : 'border-border text-muted-foreground hover:border-amber-500/30'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+            <button
+              onClick={() => { setShowCustomTime(true); setSelectedPreset(-1) }}
+              className={`px-3 py-2 rounded-full text-sm font-medium border transition-all flex items-center gap-1.5 ${
+                showCustomTime
+                  ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                  : 'border-border text-muted-foreground hover:border-amber-500/30'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" /> Pilih jam
+            </button>
+          </div>
+          {showCustomTime && (
+            <input
               type="datetime-local"
               value={startedAt}
               onChange={e => setStartedAt(e.target.value)}
-              required
+              className="mt-2 w-full bg-secondary border border-border rounded-xl px-3 py-2 text-base"
             />
-          </div>
+          )}
+          <p className="text-xs text-muted-foreground mt-1">Waktu: {displayTime}</p>
+        </div>
 
-          <div className="space-y-2">
-            <Label>Keparahan: <span className={cn('font-bold', severityColors(severity))}>{severity}/10 – {severityLabel(severity)}</span></Label>
-            <Slider
-              value={severity}
-              onChange={setSeverity}
-              min={1}
-              max={10}
-            />
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>1 = sangat ringan</span>
-              <span>10 = sangat parah</span>
-            </div>
+        {/* Severity grid 2×5 (NOT a slider) */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium">Keparahan</p>
+            <span className={cn(
+              'text-sm font-bold px-3 py-1 rounded-full',
+              severity <= 2 ? 'text-emerald-300' :
+              severity <= 4 ? 'text-yellow-300' :
+              severity <= 6 ? 'text-orange-300' :
+              severity <= 8 ? 'text-red-300' : 'text-red-200'
+            )}>
+              {severity}/10 – {severityLabel(severity)}
+            </span>
           </div>
-
-          <div className="space-y-2">
-            <Label>Area Tubuh (opsional, boleh pilih banyak)</Label>
-            <div className="flex flex-wrap gap-2">
-              {BODY_AREAS.map(area => (
+          <div className="grid grid-cols-5 gap-2">
+            {SEV_GRID.map(s => {
+              const { bg, active } = sevColor(s)
+              const isSelected = severity === s
+              return (
                 <button
-                  key={area}
-                  type="button"
-                  onClick={() => toggleArea(area)}
+                  key={s}
+                  onClick={() => setSeverity(s)}
                   className={cn(
-                    'px-3 py-1.5 rounded-xl text-sm border transition-all',
-                    bodyAreas.includes(area)
-                      ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                      : 'border-border text-muted-foreground hover:border-amber-500/30'
+                    'h-12 rounded-xl border text-base font-semibold transition-all active:scale-95',
+                    isSelected ? active : bg + ' opacity-60 hover:opacity-90'
                   )}
+                  aria-pressed={isSelected}
+                  aria-label={`Keparahan ${s}`}
                 >
-                  {area}
+                  {s}
                 </button>
-              ))}
-            </div>
+              )
+            })}
           </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setHasBumps(!hasBumps)}
-              className={cn(
-                'w-12 h-6 rounded-full transition-all relative',
-                hasBumps ? 'bg-amber-500' : 'bg-border'
-              )}
-            >
-              <span className={cn(
-                'absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all',
-                hasBumps ? 'left-6' : 'left-0.5'
-              )} />
-            </button>
-            <Label className="mb-0 cursor-pointer" onClick={() => setHasBumps(!hasBumps)}>
-              Ada bentol / bilur
-            </Label>
+          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+            <span>Ringan</span>
+            <span>Sedang</span>
+            <span>Parah</span>
+            <span>Sangat parah</span>
           </div>
+        </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="itch-notes">Catatan (opsional)</Label>
-            <Textarea
-              id="itch-notes"
+        {/* Body areas */}
+        <div>
+          <p className="text-sm font-medium mb-2">Area tubuh (boleh banyak)</p>
+          <div className="flex flex-wrap gap-2">
+            {BODY_AREAS.map(area => (
+              <button
+                key={area}
+                onClick={() => toggleArea(area)}
+                className={cn(
+                  'px-3 py-2 rounded-full text-sm border transition-all',
+                  bodyAreas.includes(area)
+                    ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-medium'
+                    : 'border-border text-muted-foreground hover:border-amber-500/30'
+                )}
+                aria-pressed={bodyAreas.includes(area)}
+              >
+                {area}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Has bumps toggle */}
+        <div className="flex items-center gap-3 py-1">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={hasBumps}
+            onClick={() => setHasBumps(!hasBumps)}
+            className={cn(
+              'w-14 h-7 rounded-full transition-all relative shrink-0',
+              hasBumps ? 'bg-amber-500' : 'bg-border'
+            )}
+          >
+            <span className={cn(
+              'absolute top-0.5 w-6 h-6 rounded-full bg-white shadow-sm transition-all',
+              hasBumps ? 'left-7' : 'left-0.5'
+            )} />
+          </button>
+          <span className="text-base font-medium">Ada bentol / bilur</span>
+        </div>
+
+        {/* Notes */}
+        {!showNotes ? (
+          <button
+            onClick={() => setShowNotes(true)}
+            className="text-sm text-muted-foreground hover:text-primary transition-colors flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" /> Tambah catatan
+          </button>
+        ) : (
+          <div>
+            <p className="text-sm font-medium mb-1.5">Catatan (opsional)</p>
+            <textarea
               placeholder="Deskripsi tambahan, kondisi saat itu..."
               value={notes}
               onChange={e => setNotes(e.target.value)}
               rows={2}
+              className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-base placeholder:text-muted-foreground focus:outline-none focus:border-amber-500/50 resize-none transition-colors"
             />
           </div>
+        )}
 
-          <div className="flex gap-2 pt-2">
-            <Button type="button" variant="ghost" className="flex-1" onClick={onClose}>
-              Batal
-            </Button>
-            <Button type="submit" variant="warning" className="flex-1" loading={loading}>
-              Simpan
-            </Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
+        {/* Submit */}
+        <div className="pb-safe pt-2">
+          <Button
+            onClick={handleSubmit}
+            loading={loading}
+            className="w-full h-14 text-base font-bold rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30"
+          >
+            <Zap className="w-5 h-5 mr-2" />
+            Simpan Gatal
+          </Button>
+        </div>
+      </div>
+    </BottomSheet>
   )
 }
